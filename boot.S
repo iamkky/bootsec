@@ -1,3 +1,22 @@
+; BAsic Boot Sector 
+;	Loads and change control to a kernel image located in sequential blocks of the boot disk
+;
+;
+;	References:
+;	  EDD:
+;	    https://archive.org/details/specs-edd30/
+;	  i32/x86_64:
+;	    https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html
+;	    https://css.csail.mit.edu/6.858/2014/readings/i386/toc.htm
+;	  Bios Services:
+;	    https://www.ctyme.com/rbrown.htm
+;	    https://www.ctyme.com/intr/int-13.htm
+;	  Nasm:
+;	    https://www.nasm.us/doc/
+;	  Bootsec tutor:
+;	    https://www.cs.bham.ac.uk/~exr/lectures/opsys/10_11/lectures/os-dev.pdf
+
+
 ;
 ; ASCII CHARS
 ;
@@ -6,33 +25,36 @@ LF		equ 10		; Line Feed
 FF		equ 12		; Form Feed
 BS		equ  8		; Backspace
 
-		org	7C00h
+; 
+; General Parameters
+;
 
-; Not sure but looks like jmp is part of boot sector "magic id"
+disk_retries	equ	4
+
+
+; Not sure, but looks like jmp is part of boot sector "magic id"
 ; for some old BIOS
 
+		org	7C00h
 begin:
-                jmp short .start
+                jmp	short .start
                 nop
 .start:
 		mov	[BootDrive], dl		; Saves Bios boot drive number
 
-		;mov	edx, esp		; check value of SP
-		;call	biosWriteHex
-		;mov	edx, 0x3430		; biosWriteHex test
-		;call	biosWriteHex
-
-		mov	si, msg
+		mov	si, msg_starting
 		call	biosWriteStr
 
-; Exit from int 13h 41h
-; carry clear
-; AH - Version of extensions = 30h
-; AL - Internal use only
-; BX - AA55h
-; CX - Interface support bit map (seeTable 2 )
-; carry set
-; AH - error code (01h, Invalid Command)
+; checkEdd:
+;	Checks by Extended Disk Drive Specification BIOS
+;	Exit from int 13h 41h
+;	carry clear
+;	AH - Version of extensions = 30h
+;	AL - Internal use only
+;	BX - AA55h
+;	CX - Interface support bit map (seeTable 2 )
+;	carry set
+;	AH - error code (01h, Invalid Command)
 checkEdd:
 		mov	si, msg_edd_bios
 		call	biosWriteStr
@@ -47,27 +69,30 @@ checkEdd:
 .ok:
 		mov	si, msg_ok
 		call	biosWriteStr
+		call	biosWriteCRLF
 
-
-
-		call	showRegister
+	;	call	showRegisters
 
 ReadStage2:
-		mov	si, DataPacket		; address of "disk address packet"
-		mov	ah, 0x42		; AL is unused
-		mov	dl, [BootDrive]		; drive number 0 (OR the drive # with 0x80)
-		int	0x13
-		jnc	short .ok
+		mov	eax, 0x1
+		mov	ebx, 0x7e00
+		mov	edx, 0x1	
+		call	readSec
+
+Stage2Check:
+		mov	dx, [stage2_magic]
+		cmp	dx, stage2_signature
+		je	.ok
+		mov	si, msg_stage2_fail
+		call	biosWriteStr
 		jmp	bootFail
+
 .ok:
+		mov	si, msg_stage2_ok
+		call	biosWriteStr
 
-		mov	edx,[magic_stage2]
-		call	biosWriteHex
-		call	biosWriteCRLF
-		
+JumpToStage2:
 		jmp	stage2
-
-		jmp	$				; Jump to the current address ( i.e. forever ) .
 ;
 ; Padding and magic BIOS number.
 ;
@@ -77,94 +102,129 @@ bootFail:
 		call	biosWriteStr
 		jmp	$
 
-; Reads N sector using bios int 13h 42h
-; AX: Block count to read
-; BX; Destination address
-; EDX: LBA address
+; readSec: 
+; 	Reads N sector using bios int 13h 42h
+; 	AX:    Block count to read
+; 	ES:BX: Destination address
+; 	EDX:   LBA address
+;
+; readOneSec:
+;	Same but reads just one sector
 
-retries		equ	8
 
+readOneSec:	
+		mov	ax, 1
 readSec:
-		mov	[DataPacket.buffer], bx
-		mov	[DataPacket.lba], edx
-		push	dx
-		mov	dh, retries
-.retry
 		push	ax
+		mov	[DataPacket.buffer], bx
+		mov	[DataPacket.segment], es
+		mov	[DataPacket.lba], edx
+		mov	dh, disk_retries
+.retry:
 		mov	[DataPacket.blocks], ax
 		mov	si, DataPacket		; address of "disk address packet"
 		mov	ah, 0x42		; AL is unused
 		mov	dl, [BootDrive]		; drive number 0 (OR the drive # with 0x80)
 		int	0x13
 		jnc	short .ok
-		
-		pop	ax
+		mov	ax,[esp]
 		dec	dh
-		test	dh, dh
 		jnz	.retry
 
-		pop	dx
+		pop	ax
 		jmp	bootFail
 .ok:
 		pop	ax
-		pop	dx
 		ret
-		
 
-readsector:
-		
+showRegisters:
+		pushad
+		mov	di, msg_register
+		mov	si, sp
+.loop:
+		mov	edx, [di]
+		mov	eax, [si]
+		call	showHexWithLabel
+		add	si, 4
+		add	di, 4
+		cmp	di, msg_register + 32
+		jne	.loop
+		popad
+		ret
 
-showRegister:
-		call	biosWriteCRLF
-		mov	edx, 'ESP:'
+; showHexWithLabel:
+;	Shows a Hex value with a label, in the form 'LLL:<value>'
+;	maily used by showRegisters:
+; 	EDX: Label
+; 	EAX: Hex
+; 	
+showHexWithLabel:
+		push	eax
 		call	biosWriteEdx
-		mov	edx, esp
+		pop	edx
 		call	biosWriteHex
 		call	biosWriteCRLF
 		ret
-		
 
 %include "conio.inc"
 
 ;
-; Strings
+; Messages
 ;
 
-msg_bootfail	db CR, LF, 'Boot Aborted!', CR, LF, 0
-msg		db 'Abud online', CR, LF, 0
-msg_edd_bios	db 'EDD BIOS: ', 0
-msg_failed	db 'Failed', 0
-msg_ok		db 'OK', 0
-BootDrive	db  0
+msg_bootfail	db	CR, LF, 'Boot Aborted!', CR, LF, 0
+msg_starting	db	'ABDL Starting', CR, LF, 0
+msg_stage2_fail	db	'Failed to load stage 2', CR, LF, 0
+msg_stage2_ok	db	'Second Stage Check', CR, LF, 0
+msg_edd_bios	db	'EDD BIOS: ', 0
+msg_failed	db	'Failed', 0
+msg_ok		db	'OK', 0
+msg_register	dw	'EDI:ESI:EBL:ESP:EBX:EDX:ECX:EAX:'
+BootDrive	db	0
 ;
 ; From: https://wiki.osdev.org/Disk_access_using_the_BIOS_(INT_13h)
 ;
 DataPacket:
-		db	0x10
-		db	0
-.blocks:	dw	1		; int 13 resets this to # of blocks actually read/written
-.buffer:	dw	0x7e00		; memory buffer destination address (0:7c00)
-		dw	0		; in memory page zero
-.lba:		dd	1		; put the lba to read in this spot
-		dd	0		; more storage bytes only for big lba's ( > 4 bytes )
+		db	0x10		; Frame size: 16 bytes
+		db	0		; Must be zero (convention)
+.blocks:	dw	0		; number of blocks
+.buffer:	dw	0x7e00		; Buffer address
+.segment	dw	0		; Buffer Segment
+.lba:		dd	1		; LBA block address
  
 
-		times 510-($-$$) db 0		; Pad the boot sector out with zeros
-		dw 0xaa55			; Last two bytes form the magic number ,
+		times 0x1be-($-$$) db 0	; Pad up to MBR partition position and places a 'fake' partitions
+						; Looks like satisfy some BIOS that want a MBR partition in place
+		db	80h, 01h, 01h, 00h, 83h, 0FEh, 3Fh, 00h, 3Fh, 00h, 00h, 00h
+	
+		times (0x200-2) - ($-$$) db 0	; Pad up to end of bootsector - 2
+		dw 0xaa55			; Magic bootsector number
 
-magic_stage2:
-		
-		dw 0xabcd
+; =========================================================
+; === Stage 2
+; ========================================================
+
+stage2_signature	equ	0xabcd
+
+stage2_magic:
+		dw	stage2_signature
 
 stage2:
-		mov	si,	msg_stage2
+		mov	si, msg_stage2
 		call	biosWriteStr
+		
+		; Do something at stage 2 :-)
+
+		call	biosWriteCRLF
+		call	showRegisters
+		call	biosWriteCRLF
+
 		jmp	$
 
 
-msg_stage2	db 'Second Stage loaded', CR, LF, 0
+msg_stage2	db 'ABDL Second Stage Starting', CR, LF, 0
 
-		times 1024-($-$$) db 0		; Pad second sector out with zeros
+		times 2048-($-$$) db 0		; Pad second sector out with zeros
 
 ; so BIOS knows we are a boot sector.
 
