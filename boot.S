@@ -92,7 +92,7 @@ Stage2Check:
 		call	biosWriteStr
 
 JumpToStage2:
-		jmp	stage2
+		jmp	0:stage2
 ;
 ; Padding and magic BIOS number.
 ;
@@ -219,8 +219,46 @@ stage2:
 		call	showRegisters
 		call	biosWriteCRLF
 
+		call	checkA20
+		call	showRegisters
+
 		jmp	$
 
+
+;	out:
+;		ax - state (0 - disabled, 1 - enabled)
+checkA20:
+		pushf
+		push si
+		push di
+		push ds
+		push es
+		cli
+ 
+		mov ax, 0x0000					;	0x0000:0x0500(0x00000500) -> ds:si
+		mov ds, ax
+		mov si, 0x0500
+ 
+		not ax						;	0xffff:0x0510(0x00100500) -> es:di
+		mov es, ax
+		mov di, 0x0510
+ 
+		mov ah, 1
+		mov byte [ds:si], 0
+		mov byte [es:di], 1
+		mov al, [ds:si]
+		cmp al, [es:di]					;	check byte at address 0x0500 != byte at address 0x100500
+		jne .exit
+		dec ah
+.exit:
+		shr ax, 8					;	move result from ah to al register and clear ah
+		sti
+		pop es
+		pop ds
+		pop di
+		pop si
+		popf
+		ret
 
 msg_stage2	db 'ABDL Second Stage Starting', CR, LF, 0
 

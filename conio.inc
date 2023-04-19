@@ -53,8 +53,9 @@ biosWriteHex:
 	add	al, 7
 .L5:	
 	call	biosWriteChar
-	dec	cx
-	jne	.L4
+	loop	.L4
+	;dec	cx
+	;jne	.L4
 
 	rep ret
 
@@ -63,16 +64,17 @@ biosWriteHex:
 ; Uses eax, ebx, ecx, edx
 
 biosWriteEdx:
-	mov	cl, 4
+	mov	cx, 4
 .L4:
 	mov	ax, dx
 	and	al, 0xff
-	je	.L5
+	jz	.L5
 	shr	edx, 8
 	call	biosWriteChar
-	dec	cl
+	loop	.L4
+	;dec	cl
+	;jne	.L4
 .L5:
-	jne	.L4
 	rep ret
 
 
