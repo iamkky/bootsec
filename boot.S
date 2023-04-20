@@ -150,12 +150,12 @@ readSec:
 showRegisters:
 		pushad
 		mov	di, msg_register
-		mov	si, sp
+		mov	bp, sp
 .loop:
 		mov	edx, [di]
-		mov	eax, [si]
+		mov	eax, [bp]
 		call	showHexWithLabel
-		add	si, 4
+		add	bp, 4
 		add	di, 4
 		cmp	di, msg_register + 32
 		jne	.loop
