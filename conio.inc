@@ -1,5 +1,3 @@
-	section .text
-
 ; Writes a char in AL to screen
 ; input: al pointer to strings
 ; Uses eax, ebx
@@ -15,11 +13,11 @@ biosWriteChar:
 ; Uses eax, ebx
 
 biosWriteCRLF:
-	mov	al, CR
-	call	biosWriteChar
-	mov	al, LF
-	call	biosWriteChar
+	mov	si, CRLF
+	call	biosWriteStr
 	ret
+
+CRLF:	db	CR, LF, 0
 	
 ; Writes out a null terminated string pointed by SI
 ; input: si pointer to strings

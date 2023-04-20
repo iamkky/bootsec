@@ -40,11 +40,13 @@ begin:
                 jmp	short .start
                 nop
 .start:
+		cli
 		xor	ax, ax
 		mov	ds, ax
 		mov	es, ax
 		mov	ss, ax
 		mov	[BootDrive], dl		; Saves Bios boot drive number
+		sti
 
 		mov	si, msg_starting
 		call	biosWriteStr
@@ -63,14 +65,20 @@ checkEdd:
 		mov	si, msg_edd_bios
 		call	biosWriteStr
 		mov	ah, 0x41
-		mov	bx, 0x55AA
+		mov	bx, 0x55aa
 		mov	dl, [BootDrive]
 		int	0x13
 		jnc	.ok
+.fail:
 		mov	si, msg_failed
 		call	biosWriteStr
 		jmp	bootFail
 .ok:
+		cmp	bx, 0xaa55
+		jne	.fail
+		test	cx, 1
+		jz	.fail
+
 		mov	si, msg_ok
 		call	biosWriteStr
 		call	biosWriteCRLF
@@ -95,8 +103,9 @@ Stage2Check:
 
 JumpToStage2:
 		jmp	0:stage2
+
 ;
-; Padding and magic BIOS number.
+; Abort message
 ;
 
 bootFail:
@@ -121,7 +130,7 @@ readSec:
 		mov	[DataPacket.buffer], bx
 		mov	[DataPacket.segment], es
 		mov	[DataPacket.lba], edx
-		mov	cl, disk_retries
+		mov	cx, disk_retries
 .retry:
 		mov	[DataPacket.blocks], ax
 		mov	si, DataPacket
@@ -130,8 +139,7 @@ readSec:
 		int	0x13
 		jnc	short .ok
 		mov	ax, [esp]
-		dec	cl
-		jnz	.retry
+		loop	.retry
 
 		pop	ax
 		jmp	bootFail
@@ -190,13 +198,13 @@ DataPacket:
 msg_bootfail	db	CR, LF, 'Boot Aborted!', CR, LF, 0
 msg_starting	db	'ABDL Starting', CR, LF, 0
 msg_stage2_fail	db	'Failed to load stage 2', CR, LF, 0
-msg_stage2_ok	db	'Second Stage Check', CR, LF, 0
+msg_stage2_ok	db	'S2 Check', CR, LF, 0
 msg_edd_bios	db	'EDD BIOS: ', 0
 msg_failed	db	'Failed', 0
 msg_ok		db	'OK', 0
 msg_register	dw	'EDI:ESI:EBL:ESP:EBX:EDX:ECX:EAX:'
 
-		times 0x1be-($-$$) db 0	; Pad up to MBR partition position and places a 'fake' partitions
+		times 0x1be-($-$$) db 0		; Pad up to MBR partition position and places a 'fake' partitions
 						; Looks like satisfy some BIOS that want a MBR partition in place
 		;db	80h, 01h, 01h, 00h, 83h, 0FEh, 3Fh, 00h, 3Fh, 00h, 00h, 00h
 		db	80h, 01h, 01h, 00h, 83h, 0FEh, 3Fh, 00h, 3Fh, 00h, 00h, 00h, 82h, 3Eh, 00h, 00h, 00h, 00h
@@ -229,42 +237,45 @@ stage2:
 		jmp	$
 
 
+; code from: https://wiki.osdev.org/A20_Line
 ;	out:
 ;		ax - state (0 - disabled, 1 - enabled)
 checkA20:
 		pushf
-		push si
-		push di
-		push ds
-		push es
+		push	si
+		push	di
+		push	ds
+		push	es
 		cli
  
-		mov ax, 0x0000					;	0x0000:0x0500(0x00000500) -> ds:si
-		mov ds, ax
-		mov si, 0x0500
+		mov	ax, 0x0000					;	0x0000:0x0500(0x00000500) -> ds:si
+		mov	ds, ax
+		mov	si, 0x0500
  
-		not ax						;	0xffff:0x0510(0x00100500) -> es:di
-		mov es, ax
-		mov di, 0x0510
+		not	ax						;	0xffff:0x0510(0x00100500) -> es:di
+		mov	es, ax
+		mov	di, 0x0510
  
-		mov ah, 1
-		mov byte [ds:si], 0
-		mov byte [es:di], 1
-		mov al, [ds:si]
-		cmp al, [es:di]					;	check byte at address 0x0500 != byte at address 0x100500
-		jne .exit
-		dec ah
+		mov	ah, 1
+		mov	byte [ds:si], 0
+		mov	byte [es:di], 1
+		out	0x80, al
+		out	0x80, al
+		mov	al, [ds:si]
+		cmp	al, [es:di]					;	check byte at address 0x0500 != byte at address 0x100500
+		jne 	.exit
+		dec	ah
 .exit:
-		shr ax, 8					;	move result from ah to al register and clear ah
+		shr	ax, 8					;	move result from ah to al register and clear ah
 		sti
-		pop es
-		pop ds
-		pop di
-		pop si
+		pop	es
+		pop	ds
+		pop	di
+		pop	si
 		popf
 		ret
 
-msg_stage2	db 'ABDL Second Stage Starting', CR, LF, 0
+msg_stage2	db 'S2 Starting', CR, LF, 0
 
 		times 2048-($-$$) db 0		; Pad second sector out with zeros
 
