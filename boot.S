@@ -40,12 +40,16 @@ begin:
                 jmp	short .start
                 nop
 .start:
+		xor	ax, ax
+		mov	ds, ax
+		mov	es, ax
+		mov	ss, ax
 		mov	[BootDrive], dl		; Saves Bios boot drive number
 
 		mov	si, msg_starting
 		call	biosWriteStr
 
-; checkEdd:
+; checkEdd
 ;	Checks by Extended Disk Drive Specification BIOS
 ;	Exit from int 13h 41h
 ;	carry clear
@@ -71,11 +75,9 @@ checkEdd:
 		call	biosWriteStr
 		call	biosWriteCRLF
 
-	;	call	showRegisters
-
 ReadStage2:
-		mov	eax, 0x1
-		mov	ebx, 0x7e00
+		mov	ax, 0x1
+		mov	bx, 0x7e00
 		mov	edx, 0x1	
 		call	readSec
 
@@ -119,16 +121,16 @@ readSec:
 		mov	[DataPacket.buffer], bx
 		mov	[DataPacket.segment], es
 		mov	[DataPacket.lba], edx
-		mov	dh, disk_retries
+		mov	cl, disk_retries
 .retry:
 		mov	[DataPacket.blocks], ax
-		mov	si, DataPacket		; address of "disk address packet"
-		mov	ah, 0x42		; AL is unused
-		mov	dl, [BootDrive]		; drive number 0 (OR the drive # with 0x80)
+		mov	si, DataPacket
+		mov	ah, 0x42
+		mov	dl, [BootDrive]
 		int	0x13
 		jnc	short .ok
-		mov	ax,[esp]
-		dec	dh
+		mov	ax, [esp]
+		dec	cl
 		jnz	.retry
 
 		pop	ax
@@ -168,6 +170,19 @@ showHexWithLabel:
 
 %include "conio.inc"
 
+BootDrive	db	0
+;
+; From: https://wiki.osdev.org/Disk_access_using_the_BIOS_(INT_13h)
+;
+DataPacket:
+		db	0x10		; Frame size: 16 bytes
+		db	0		; Must be zero (convention)
+.blocks:	dw	0		; number of blocks
+.buffer:	dw	0x7e00		; Buffer address
+.segment	dw	0		; Buffer Segment
+.lba:		dd	1		; LBA block address
+.notused	dd	0		; Linear memory address (not used)
+ 
 ;
 ; Messages
 ;
@@ -180,22 +195,11 @@ msg_edd_bios	db	'EDD BIOS: ', 0
 msg_failed	db	'Failed', 0
 msg_ok		db	'OK', 0
 msg_register	dw	'EDI:ESI:EBL:ESP:EBX:EDX:ECX:EAX:'
-BootDrive	db	0
-;
-; From: https://wiki.osdev.org/Disk_access_using_the_BIOS_(INT_13h)
-;
-DataPacket:
-		db	0x10		; Frame size: 16 bytes
-		db	0		; Must be zero (convention)
-.blocks:	dw	0		; number of blocks
-.buffer:	dw	0x7e00		; Buffer address
-.segment	dw	0		; Buffer Segment
-.lba:		dd	1		; LBA block address
- 
 
 		times 0x1be-($-$$) db 0	; Pad up to MBR partition position and places a 'fake' partitions
 						; Looks like satisfy some BIOS that want a MBR partition in place
-		db	80h, 01h, 01h, 00h, 83h, 0FEh, 3Fh, 00h, 3Fh, 00h, 00h, 00h
+		;db	80h, 01h, 01h, 00h, 83h, 0FEh, 3Fh, 00h, 3Fh, 00h, 00h, 00h
+		db	80h, 01h, 01h, 00h, 83h, 0FEh, 3Fh, 00h, 3Fh, 00h, 00h, 00h, 82h, 3Eh, 00h, 00h, 00h, 00h
 	
 		times (0x200-2) - ($-$$) db 0	; Pad up to end of bootsector - 2
 		dw 0xaa55			; Magic bootsector number

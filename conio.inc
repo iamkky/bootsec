@@ -54,8 +54,6 @@ biosWriteHex:
 .L5:	
 	call	biosWriteChar
 	loop	.L4
-	;dec	cx
-	;jne	.L4
 
 	rep ret
 
@@ -72,8 +70,6 @@ biosWriteEdx:
 	shr	edx, 8
 	call	biosWriteChar
 	loop	.L4
-	;dec	cl
-	;jne	.L4
 .L5:
 	rep ret
 
