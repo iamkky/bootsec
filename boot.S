@@ -227,13 +227,15 @@ stage2:
 		
 		; Do something at stage 2 :-)
 
-		call	biosWriteCRLF
-		call	showRegisters
-		call	biosWriteCRLF
+		;call	biosWriteCRLF
+		;call	showRegisters
+		;call	biosWriteCRLF
 
 		call	checkA20
 		call	showRegisters
 
+		call	pm_test
+		call	showRegisters
 		jmp	$
 
 
@@ -274,6 +276,65 @@ checkA20:
 		pop	si
 		popf
 		ret
+
+pm_test:
+		cli
+		lgdt	[gdt_descriptor]
+		mov	eax, cr0
+		or	eax, 0x1
+		mov	cr0, eax
+		jmp	CODE_SEG:.init_pm
+		bits 32
+.init_pm:
+		mov	ax, DATA_SEG
+		mov	ds, ax
+		mov	es, ax
+
+		; 32 bits pm code
+		call	abcd_pm_mode
+
+		; returning to real mode
+		mov	ax, DATA_BACK_TO_16
+		mov	es, ax
+		mov	ds, ax
+		mov	es, ax
+
+		jmp	CODE_BACK_TO_16:.back
+.back:
+		bits 16
+		mov	eax, cr0
+		and	al, 0xfe 
+		mov	cr0, eax
+		jmp	0x0:.exit_pm
+.exit_pm:
+		xor	ax, ax
+		mov	ds, ax
+		mov	es, ax
+		mov	ss, ax
+		sti
+
+		ret
+
+		
+; 32 bits protected mode code
+		bits 32
+;
+; writes 'ABCD' on left upper corner of screen
+; Using direct video access in 32 bits protected mode
+; just a test
+;
+abcd_pm_mode:
+		mov	ax, 0x0f41
+		mov	[0xb8000], ax
+		mov	ax, 0x0f42
+		mov	[0xb8002], ax
+		mov	ax, 0x0f43
+		mov	[0xb8004], ax
+		mov	ax, 0x0f44
+		mov	[0xb8006], ax
+		ret
+
+%include "gdt.inc"
 
 msg_stage2	db 'S2 Starting', CR, LF, 0
 
