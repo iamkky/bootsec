@@ -18,6 +18,13 @@
 
 
 ;
+; Kernel Protocol fields
+;	From: https://www.kernel.org/doc/html/latest/x86/boot.html
+;
+
+%include "kprot.inc"
+
+;
 ; ASCII CHARS
 ;
 CR		equ 13		; Carriage Return
@@ -202,7 +209,7 @@ msg_stage2_ok	db	'S2 Check', CR, LF, 0
 msg_edd_bios	db	'EDD BIOS: ', 0
 msg_failed	db	'Failed', 0
 msg_ok		db	'OK', 0
-msg_register	dw	'EDI:ESI:EBL:ESP:EBX:EDX:ECX:EAX:'
+msg_register	dw	'EDI:ESI:EBP:ESP:EBX:EDX:ECX:EAX:'
 
 		times 0x1be-($-$$) db 0		; Pad up to MBR partition position and places a 'fake' partitions
 						; Looks like satisfy some BIOS that want a MBR partition in place
@@ -222,22 +229,91 @@ stage2_magic:
 		dw	stage2_signature
 
 stage2:
-		mov	si, msg_stage2
+		mov	si, msg_s2.stage2
 		call	biosWriteStr
 		
-		; Do something at stage 2 :-)
-
-		;call	biosWriteCRLF
-		;call	showRegisters
-		;call	biosWriteCRLF
-
 		call	checkA20
-		call	showRegisters
+		cmp	ax, 1
+		je	.a20_ok
+		
+		mov	si, msg_s2.a20_disabled
+		call	biosWriteStr
+		jmp	bootFail
 
-		call	pm_test
-		call	showRegisters
+.a20_ok:
+		; Loads a kernel staring at LBA 0x04
+		mov	edx, 0x04
+		call	loadKernel
+
 		jmp	$
 
+;
+; Loads a Kernel staring at LBA block pointed by EDX
+;
+
+loadKernel:
+		; Reads first 32kb at 0x1000:0000
+		mov	ax, 0x1000
+		mov	es, ax
+		mov	ax, 64
+		mov	bx, 0x0000
+		call	readSec
+
+		mov	ax, [es:kh_boot_flag]
+		cmp	ax, 0xAA55
+		je	.sig_ok
+.sig_not_ok:
+		mov	si, msg_s2.fail_sig1
+		call	biosWriteStr
+		jmp	bootFail
+.sig_ok:
+		mov	eax, [es:kh_header]
+		cmp	eax, 'HdrS'
+		jne	.sig_not_ok
+
+		movzx	edx, byte [es:kh_setup_sects]
+		call	writeHexSpace
+		mov	edx, [es:kh_syssize]
+		call	writeHexSpace
+		movzx	edx, word [es:kh_version]
+		call	writeHexSpace
+
+		xor	eax, eax
+		mov	[es:kh_ramdisk_image], eax
+		mov	[es:kh_ramdisk_size], eax
+
+		mov	al, 0xff
+		mov	[es:kh_type_of_loader], al
+
+		mov	si, defcmdline
+		mov	cx, defcmdline_size
+		mov	edi, cmdline_final
+		mov	[es:kh_cmd_line_ptr], edi
+		rep movsb
+
+		call	showRegisters
+
+		; just a test
+		cli
+
+		mov	ax, 0x1000
+		mov	ds, ax
+		mov	es, ax
+		mov	ss, ax
+		mov	fs, ax
+		mov	gs, ax
+
+		mov	sp, 0x
+
+		jmp	0x1020:0000 
+
+		ret
+
+writeHexSpace:
+		call	biosWriteHex
+		mov	edx, ' '
+		call	biosWriteEdx
+		ret
 
 ; code from: https://wiki.osdev.org/A20_Line
 ;	out:
@@ -336,7 +412,15 @@ abcd_pm_mode:
 
 %include "gdt.inc"
 
-msg_stage2	db 'S2 Starting', CR, LF, 0
+defcmdline	db	'linux auto', 0
+defcmdline_size	equ	$-defcmdline
+
+msg_s2:
+.stage2		db	'S2 Starting', CR, LF, 0
+.a20_disabled	db	'S2 A20 Not Enabled', CR, LF, 0
+.fail_sig1	db	'S2 Signature failed', CR, LF, 0
+
+cmdline_final	equ	0x9000
 
 		times 2048-($-$$) db 0		; Pad second sector out with zeros
 
