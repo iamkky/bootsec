@@ -16,12 +16,10 @@
 ;	  Bootsec tutor:
 ;	    https://www.cs.bham.ac.uk/~exr/lectures/opsys/10_11/lectures/os-dev.pdf
 
-
 ;
 ; Kernel Protocol fields
 ;	From: https://www.kernel.org/doc/html/latest/x86/boot.html
 ;
-
 %include "kprot.inc"
 
 ;
@@ -35,13 +33,11 @@ BS		equ  8		; Backspace
 ; 
 ; General Parameters
 ;
-
 disk_retries	equ	4
 
 
 ; Not sure, but looks like jmp is part of boot sector "magic id"
 ; for some old BIOS
-
 		org	7C00h
 begin:
                 jmp	short .start
@@ -78,8 +74,7 @@ checkEdd:
 		jnc	.ok
 .fail:
 		mov	si, msg_failed
-		call	biosWriteStr
-		jmp	bootFail
+		jmp	bootFailMsg
 .ok:
 		cmp	bx, 0xaa55
 		jne	.fail
@@ -101,8 +96,7 @@ Stage2Check:
 		cmp	dx, stage2_signature
 		je	.ok
 		mov	si, msg_stage2_fail
-		call	biosWriteStr
-		jmp	bootFail
+		jmp	bootFailMsg
 
 .ok:
 		mov	si, msg_stage2_ok
@@ -115,6 +109,8 @@ JumpToStage2:
 ; Abort message
 ;
 
+bootFailMsg:
+		call	biosWriteStr
 bootFail:
 		mov	si, msg_bootfail
 		call	biosWriteStr
@@ -204,7 +200,7 @@ DataPacket:
 
 msg_bootfail	db	CR, LF, 'Boot Aborted!', CR, LF, 0
 msg_starting	db	'ABDL Starting', CR, LF, 0
-msg_stage2_fail	db	'Failed to load stage 2', CR, LF, 0
+msg_stage2_fail	db	'Failed second stage load', CR, LF, 0
 msg_stage2_ok	db	'S2 Check', CR, LF, 0
 msg_edd_bios	db	'EDD BIOS: ', 0
 msg_failed	db	'Failed', 0
@@ -237,13 +233,12 @@ stage2:
 		je	.a20_ok
 		
 		mov	si, msg_s2.a20_disabled
-		call	biosWriteStr
-		jmp	bootFail
+		jmp	bootFailMsg
 
 .a20_ok:
 		; Loads a kernel staring at LBA 0x04
 		mov	edx, 0x04
-		call	loadKernel
+		jmp	loadKernel
 
 		jmp	$
 
@@ -251,12 +246,14 @@ stage2:
 ; Loads a Kernel staring at LBA block pointed by EDX
 ;
 
+cmdline		equ	0xe000
+
 loadKernel:
 		; Reads first 32kb at 0x1000:0000
 		mov	ax, 0x1000
 		mov	es, ax
-		mov	ax, 64
 		mov	bx, 0x0000
+		mov	ax, 64
 		call	readSec
 
 		mov	ax, [es:kh_boot_flag]
@@ -264,8 +261,7 @@ loadKernel:
 		je	.sig_ok
 .sig_not_ok:
 		mov	si, msg_s2.fail_sig1
-		call	biosWriteStr
-		jmp	bootFail
+		jmp	bootFailMsg
 .sig_ok:
 		mov	eax, [es:kh_header]
 		cmp	eax, 'HdrS'
@@ -277,43 +273,55 @@ loadKernel:
 		call	writeHexSpace
 		movzx	edx, word [es:kh_version]
 		call	writeHexSpace
+		call	biosWriteCRLF
 
 		xor	eax, eax
-		mov	[es:kh_ramdisk_image], eax
-		mov	[es:kh_ramdisk_size], eax
+		mov	dword [es:kh_ramdisk_image], eax
+		mov	dword [es:kh_ramdisk_size], eax
+		mov	word [es:kh_heap_end_ptr], 0xde00	
+		mov	byte [es:kh_type_of_loader], 0xff
+		mov	dword [es:kh_cmd_line_ptr], 0x10000+cmdline
+		or	byte [es:kh_loadflags], 0x80
 
-		mov	al, 0xff
-		mov	[es:kh_type_of_loader], al
-
+		cld
 		mov	si, defcmdline
 		mov	cx, defcmdline_size
-		mov	edi, cmdline_final
-		mov	[es:kh_cmd_line_ptr], edi
+		mov	di, cmdline
 		rep movsb
 
-		call	showRegisters
+		;call	showRegisters
+.comment1:
 
-		; just a test
+runKernel:
+		;
+		; Breaking Execution for debug with qemu
+		;
+		break	equ	0x2bb
+		;mov	byte [es:break], 0xeb
+		;mov	byte [es:break+1], 0xfe
+
+		; Put this here to break signature and see that real mode setup are really running
+		mov	byte [es:0x2a5], 0xfe
 		cli
-
 		mov	ax, 0x1000
 		mov	ds, ax
 		mov	es, ax
-		mov	ss, ax
 		mov	fs, ax
 		mov	gs, ax
+		mov	ss, ax
+		mov	sp, 0xe000
+.jump1:
 
-		mov	sp, 0x
-
-		jmp	0x1020:0000 
-
-		ret
+		jmp	0x1020:0x0000
 
 writeHexSpace:
 		call	biosWriteHex
 		mov	edx, ' '
 		call	biosWriteEdx
 		ret
+
+
+		
 
 ; code from: https://wiki.osdev.org/A20_Line
 ;	out:
@@ -420,9 +428,5 @@ msg_s2:
 .a20_disabled	db	'S2 A20 Not Enabled', CR, LF, 0
 .fail_sig1	db	'S2 Signature failed', CR, LF, 0
 
-cmdline_final	equ	0x9000
-
-		times 2048-($-$$) db 0		; Pad second sector out with zeros
-
-; so BIOS knows we are a boot sector.
+		times	2048-($-$$) db 0
 
