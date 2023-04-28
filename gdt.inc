@@ -21,6 +21,7 @@
 ;		L   - Long-mode code flag			1-64 bits code seg (for non code seg and 32 bits code seg should be 0)
 ;		R   - Reserved					not used
 
+		align 8
 gdt_start:
 gdt_null:
 		dd	0x0 
@@ -36,6 +37,7 @@ gdt_code:
 		db	0x0		; Base ( bits 16 -23)
 		db	10011010b	; 1 st flags , type flags
 		db	11001111b	; 2 nd flags , Limit ( bits 16 -19)
+		;db	10001111b	; 2 nd flags , Limit ( bits 16 -19)
 		db	0x0		; Base ( bits 24 -31)
 
 gdt_data:

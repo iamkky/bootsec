@@ -86,7 +86,7 @@ checkEdd:
 		call	biosWriteCRLF
 
 ReadStage2:
-		mov	ax, 0x1
+		mov	ax, 0x3
 		mov	bx, 0x7e00
 		mov	edx, 0x1	
 		call	readSec
@@ -244,18 +244,25 @@ stage2:
 
 ;
 ; Loads a Kernel staring at LBA block pointed by EDX
+; EDX : Lba first sector of kernel
 ;
 
 cmdline		equ	0xe000
 
 loadKernel:
+		; Saves
+		mov	[startsec], edx
+
 		; Reads first 32kb at 0x1000:0000
+		; (that contains old built in boot sector + real mode kernel setup)
+		;
 		mov	ax, 0x1000
 		mov	es, ax
 		mov	bx, 0x0000
 		mov	ax, 64
 		call	readSec
 
+		; Check boot_flag and 'HdrS' signatures
 		mov	ax, [es:kh_boot_flag]
 		cmp	ax, 0xAA55
 		je	.sig_ok
@@ -267,13 +274,20 @@ loadKernel:
 		cmp	eax, 'HdrS'
 		jne	.sig_not_ok
 
+		; Gives some useful information <setup_sects> <syssize> <version>
 		movzx	edx, byte [es:kh_setup_sects]
 		call	writeHexSpace
 		mov	edx, [es:kh_syssize]
 		call	writeHexSpace
 		movzx	edx, word [es:kh_version]
 		call	writeHexSpace
+		mov	edx, [es:kh_code32_start]
+		call	writeHexSpace
+
 		call	biosWriteCRLF
+
+		; Implements basic linux boot protocol
+CAN_USE_HEAP	equ	0x80
 
 		xor	eax, eax
 		mov	dword [es:kh_ramdisk_image], eax
@@ -281,7 +295,8 @@ loadKernel:
 		mov	word [es:kh_heap_end_ptr], 0xde00	
 		mov	byte [es:kh_type_of_loader], 0xff
 		mov	dword [es:kh_cmd_line_ptr], 0x10000+cmdline
-		or	byte [es:kh_loadflags], 0x80
+		or	byte [es:kh_loadflags], CAN_USE_HEAP
+		;and	byte [es:kh_loadflags], 0x7f
 
 		cld
 		mov	si, defcmdline
@@ -289,19 +304,72 @@ loadKernel:
 		mov	di, cmdline
 		rep movsb
 
-		;call	showRegisters
+		; Loads protected mode part of kernel
+		; starts at 1 + [kh_setup_sects] ofset from begining
+readKernel:
+		movzx	edx, byte [es:kh_setup_sects]
+		add	edx, [startsec]
+		inc	edx
+		mov	[lba_block], edx
+
+		mov	edi, 0x100000
+		mov	[highmem_ptr], edi
+
+		; Kernel 32k blocks count (hardcoded by now)
+		mov	word [kload_count], 1826
+
+.loop:
+		; Read 32k from disk staring at [lba_block]
+		push	es
+		mov	ax, 0x2000
+		mov	es, aX
+		mov	bx, 0x0000
+		mov	ax, 64
+		mov	edx, [lba_block]
+		call	readSec
+		pop	es
+
+		; Update lba_block by 64 (32k)
+		mov	edx, [lba_block]
+		add	edx, 64
+		mov	[lba_block], edx
+
+		; Visual feedback
+		mov	al, 'A'
+		call	biosWriteChar
+
+		; Moves 32k from lowmen buffer to high mem
+		mov	ecx,  0x8000
+		mov	esi,  0x20000
+		mov	edi, [highmem_ptr]
+		push	es
+		call	pm_test
+		pop	es
+
+		mov	edi, [highmem_ptr]
+		add	edi, 0x8000
+		mov	[highmem_ptr], edi
+
+		; More blocks?
+		mov	cx, word [kload_count];
+		dec	cx
+		mov	word [kload_count], cx
+		jnz	.loop
+
+		call	biosWriteCRLF
+		call	showRegisters
 .comment1:
 
 runKernel:
 		;
 		; Breaking Execution for debug with qemu
 		;
-		break	equ	0x2bb
+		;break	equ	0x200
 		;mov	byte [es:break], 0xeb
 		;mov	byte [es:break+1], 0xfe
 
 		; Put this here to break signature and see that real mode setup are really running
-		mov	byte [es:0x2a5], 0xfe
+		;mov	byte [es:0x2a5], 0xfe
 		cli
 		mov	ax, 0x1000
 		mov	ds, ax
@@ -310,7 +378,6 @@ runKernel:
 		mov	gs, ax
 		mov	ss, ax
 		mov	sp, 0xe000
-.jump1:
 
 		jmp	0x1020:0x0000
 
@@ -320,9 +387,89 @@ writeHexSpace:
 		call	biosWriteEdx
 		ret
 
+pm_test:
+		cli
+		lgdt	[gdt_descriptor]
+		mov	eax, cr0
+		or	eax, 0x1
+		mov	cr0, eax
+		jmp	CODE_SEG:.init_pm
+;.init_pm:
+;		mov	ax, DATA_SEG
+;		mov	ds, ax
+;		mov	es, ax
+;		mov	ss, ax
+;
+;		; 32 bits pm code
+;		call	abcd_pm_mode
+;
+;		; returning to real mode
+;		mov	ax, DATA_BACK_TO_16
+;		mov	es, ax
+;		mov	ds, ax
+;		mov	ss, ax
+;
+;		jmp	CODE_BACK_TO_16:.back
+.back:
+		bits 16
+		mov	eax, cr0
+		and	al, 0xfe 
+		mov	cr0, eax
+		jmp	0x0:.exit_pm
+.exit_pm:
+		xor	ax, ax
+		mov	ds, ax
+		mov	es, ax
+		mov	ss, ax
+		sti
+		ret
 
 		
+; 32 bits protected mode code
+		bits 32
+.init_pm:
+		mov	ax, DATA_SEG
+		mov	ds, ax
+		mov	es, ax
+		mov	ss, ax
 
+		; 32 bits pm code
+		; call	abcd_pm_mode
+
+		shr	ecx, 2
+		cld
+		rep movsd
+
+		;mov	byte [0x100000],0xE9
+		;mov	byte [0x100001],0xFB
+		;mov	byte [0x100002],0xFF
+		;mov	byte [0x100003],0xFF
+		;mov	byte [0x100004],0xFF
+
+		; returning to real mode
+		mov	ax, DATA_BACK_TO_16
+		mov	es, ax
+		mov	ds, ax
+		mov	ss, ax
+
+		jmp	CODE_BACK_TO_16:.back
+;
+; writes 'ABCD' on left upper corner of screen
+; Using direct video access in 32 bits protected mode
+; just a test
+;
+abcd_pm_mode:
+		mov	ax, 0x0f41
+		mov	[0xb8000], ax
+		mov	ax, 0x0f42
+		mov	[0xb8002], ax
+		mov	ax, 0x0f43
+		mov	[0xb8004], ax
+		mov	ax, 0x0f44
+		mov	[0xb8006], ax
+		ret
+
+		bits 16
 ; code from: https://wiki.osdev.org/A20_Line
 ;	out:
 ;		ax - state (0 - disabled, 1 - enabled)
@@ -361,72 +508,27 @@ checkA20:
 		popf
 		ret
 
-pm_test:
-		cli
-		lgdt	[gdt_descriptor]
-		mov	eax, cr0
-		or	eax, 0x1
-		mov	cr0, eax
-		jmp	CODE_SEG:.init_pm
-		bits 32
-.init_pm:
-		mov	ax, DATA_SEG
-		mov	ds, ax
-		mov	es, ax
-
-		; 32 bits pm code
-		call	abcd_pm_mode
-
-		; returning to real mode
-		mov	ax, DATA_BACK_TO_16
-		mov	es, ax
-		mov	ds, ax
-		mov	es, ax
-
-		jmp	CODE_BACK_TO_16:.back
-.back:
-		bits 16
-		mov	eax, cr0
-		and	al, 0xfe 
-		mov	cr0, eax
-		jmp	0x0:.exit_pm
-.exit_pm:
-		xor	ax, ax
-		mov	ds, ax
-		mov	es, ax
-		mov	ss, ax
-		sti
-
-		ret
-
-		
-; 32 bits protected mode code
-		bits 32
-;
-; writes 'ABCD' on left upper corner of screen
-; Using direct video access in 32 bits protected mode
-; just a test
-;
-abcd_pm_mode:
-		mov	ax, 0x0f41
-		mov	[0xb8000], ax
-		mov	ax, 0x0f42
-		mov	[0xb8002], ax
-		mov	ax, 0x0f43
-		mov	[0xb8004], ax
-		mov	ax, 0x0f44
-		mov	[0xb8006], ax
-		ret
+		nop
+		nop
 
 %include "gdt.inc"
 
-defcmdline	db	'linux auto', 0
+
+defcmdline	db	'linux debug auto', 0
 defcmdline_size	equ	$-defcmdline
+
+
+startsec	dd	0
+kload_count	dd	0
+lba_block	dd	0
+highmem_ptr	dd	0
+
 
 msg_s2:
 .stage2		db	'S2 Starting', CR, LF, 0
 .a20_disabled	db	'S2 A20 Not Enabled', CR, LF, 0
 .fail_sig1	db	'S2 Signature failed', CR, LF, 0
+		
 
 		times	2048-($-$$) db 0
 
